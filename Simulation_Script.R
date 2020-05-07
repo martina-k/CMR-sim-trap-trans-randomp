@@ -54,16 +54,18 @@ simul.ms <- function(PSI.STATE, PSI.OBS, marked, unobservable = NA){
 }
 
 
-# Starting from Kery & Schaub BPA book, example 9.4.2. 
+# Starting from Kery & Schaub BPA book, example 9.3.3 and 9.4.2. 
 # Generation of simulated data
 # Define mean survival, recapture, as well as number of occasions, states, observations and released individuals
 phi.j <- 0.4
-phi.ad <- 0.8
-p.seenbef <- 0.8
-p.nseenbef <- 0.3
+phi.ad <- 0.8 #Different survival rates to incorporate transcience
+hide <- 0.2
+hideagain <- 0.6
+p.seenbef <- 0.8 # = 1 - hide
+p.nseenbef <- 0.4 # = 1 - hideagain
 n.occasions <- 7  
-n.states <- 4 #(Juvenile, Adult-seen year before, Adult-not seen year before, Dead)
-n.obs <- 3 #(Seen as juv, Seen as ad, Not seen)
+n.states <- 4 #(Juvenile, Adult-observable, Adult-hiding (unobservable), Dead)
+n.obs <- 3 #(Seen as juv, Seen as ad (Not hiding), Not seen)
 marked <- matrix(0, ncol = n.states, nrow = n.occasions)
 marked[,1] <- rep(100, n.occasions)	# Releases only as juveniles
 
@@ -79,10 +81,10 @@ PSI.STATE <- array(NA, dim=c(n.states, n.states, totrel, n.occasions-1))
 for (i in 1:totrel){
   for (t in 1:(n.occasions-1)){
     PSI.STATE[,,i,t] <- matrix(c(
-      0, phi.j,   0,        1-phi.j,
-      0, phi.ad,  phi.ad,   1-(2*phi.ad),
-      0, phi.ad,  phi.ad,   1-(2*phi.ad),
-      0, 0,       0,        1), nrow = n.states, byrow  = TRUE)
+      0, phi.j,                 0,                  1-phi.j,
+      0, phi.ad*(1-hide),       phi.ad*hide,        1-phi.ad,
+      0, phi.ad*(1-hideagain),  phi.ad*hideagain,   1-phi.ad,
+      0, 0,                     0,                  1), nrow = n.states, byrow  = TRUE)
   } #t
 } #i
 
@@ -92,8 +94,8 @@ for (i in 1:totrel){
   for (t in 1:(n.occasions-1)){
     PSI.OBS[,,i,t] <- matrix(c(
       0, 0,         1,
-      0, p.seenbef, 1-p.seenbef,
-      0, p.nseenbef,1-p.nseenbef,
+      0, 1,         0,
+      0, 0,         1, #Unobservable state
       0, 0,         1), nrow = n.states, byrow = TRUE)
   } #t
 } #i
@@ -112,8 +114,8 @@ rCH <- CH
 rCH[rCH==0] <- 3
 
 # Analysis of the model
-# Specify model in BUGS language
-sink("trans_trap.jags")
+# Specify model - with constant phi:s and p:s
+sink("trans_trap_c-c.jags")
 cat("
     model {
     
@@ -152,17 +154,17 @@ cat("
     # Define probabilities of state S(t+1) given S(t)
     for (t in f[i]:(n.occasions-1)){
     ps[1,i,t,1] <- 0
-    ps[1,i,t,2] <- phi.j[t]
+    ps[1,i,t,2] <- phi.juv[t]
     ps[1,i,t,3] <- 0
-    ps[1,i,t,4] <- 1-phi.j[t]
+    ps[1,i,t,4] <- 1-phi.juv[t]
     ps[2,i,t,1] <- 0
-    ps[2,i,t,2] <- phi.ad[t] 
-    ps[2,i,t,3] <- phi.ad[t]
-    ps[2,i,t,4] <- 1-2*phi.ad[t]
+    ps[2,i,t,2] <- phi.ad[t] * p.O[t]
+    ps[2,i,t,3] <- phi.ad[t] * (1-p.O[t])
+    ps[2,i,t,4] <- 1-phi.ad[t]
     ps[3,i,t,1] <- 0
-    ps[3,i,t,2] <- phi.ad[t]
-    ps[3,i,t,3] <- phi.ad[t]
-    ps[3,i,t,4] <- 1-2*phi.ad[t]
+    ps[3,i,t,2] <- phi.ad[t] * p.NO[t]
+    ps[3,i,t,3] <- phi.ad[t] * (1-p.NO[t])
+    ps[3,i,t,4] <- 1-phi.ad[t]
     ps[4,i,t,1] <- 0
     ps[4,i,t,2] <- 0
     ps[4,i,t,3] <- 0
@@ -173,11 +175,11 @@ cat("
     po[1,i,t,2] <- 0
     po[1,i,t,3] <- 1
     po[2,i,t,1] <- 0
-    po[2,i,t,2] <- p.O[t]
-    po[2,i,t,3] <- 1-p.O[t]
+    po[2,i,t,2] <- 1
+    po[2,i,t,3] <- 0
     po[3,i,t,1] <- 0
-    po[3,i,t,2] <- p.NO[t]
-    po[3,i,t,3] <- 1-p.NO[t]
+    po[3,i,t,2] <- 0
+    po[3,i,t,3] <- 1
     po[4,i,t,1] <- 0
     po[4,i,t,2] <- 0
     po[4,i,t,3] <- 1
@@ -200,60 +202,39 @@ cat("
 sink()
 
 
-# Initial values
-# We have to provide initial values for the true latent state z. Since the observed state numbers do not always match the true state numbers, we cannot use simple the observed multistate capture history as initial value for z. The following function creates initial values for z from our observation under the model we want to analyse.
-
-agefirst.init <- function(ch, f){
-  age <- array(NA, dim=dim(ch))
-  for (i in 1:nrow(ch)){
-    for (t in f[i]:ncol(ch)){
-      age[i,t] <- min(c(t-f[i]+1, 4))
-    }
+# Function to create known latent states z
+known.state.ms <- function(ms, notseen){
+  # notseen: label for not seen
+  state <- ms
+  state[state==notseen] <- NA
+  for (i in 1:dim(ms)[1]){
+    m <- min(which(!is.na(state[i,])))
+    state[i,m] <- NA
   }
-  ini <- array(NA, dim=dim(ch))
-  for (i in 1:nrow(ch)){
-    for (t in f[i]:ncol(ch)){
-      if(ch[i,t]==1) ini[i,t] <- 1
-      if(ch[i,t]==2&age[i,t]==2) ini[i,t] <- 2
-      if(ch[i,t]==3&age[i,t]==2) ini[i,t] <- 4
-      if(ch[i,t]==3&age[i,t]==3) ini[i,t] <- 4
-      if(ch[i,t]==4&age[i,t]==4) ini[i,t] <- 4
-      if(ch[i,t]==2&age[i,t]==3) ini[i,t] <- 3
-    }
-  }
-  ini[which(is.na(ini))] <- age[which(is.na(ini))]
-  for (i in 1:nrow(ch)){
-    ini[i,f[i]] <- NA
-    for (t in f[i]:(ncol(ch)-1)){
-      if(ini[i,t]==4 & ini[i,t+1]==3) ini[i,t+1] <- 4
-    }
-  }
-  return(ini)
+  return(state)
 }
 
-# Add-in for JAGS
-# Since we have created a matrix with initial values for the true state z, we can use part of this information as data (see chapter 7.3.1) which can help with convergence and computing time). Here we give those initial values that are based on an actual observation. Since the first observation is deterministic, it must be excluded. The following code constructs the data matrix:
-
-ch <- rCH
-ch[ch==3] <- NA
-z.known <- agefirst.init(rCH, f)
-z.known[is.na(ch)] <- NA
-for (i in 1:nrow(ch)){
-  z.known[i,f[i]] <- NA
+# Function to create initial values for unknown z
+inits.z <- function(ch, f){
+  for (i in 1:dim(ch)[1]){ch[i,1:f[i]] <- NA}
+  notseen <- max(ch, na.rm = TRUE)
+  v <- which(ch==notseen)
+  ch[-v] <- NA
+  ch[v] <- 2 #Since state 2 and 3 are possible on recap occasions but only 2 is observed
+  return(ch)
 }
-z <- agefirst.init(rCH, f)
-z[!is.na(z.known)] <- NA
+
 
 # Bundle data
-jags.data <- list(y = rCH, f = f, n.occasions = dim(rCH)[2], nind = dim(rCH)[1], z = z.known)
+jags.data <- list(y = rCH, f = f, n.occasions = dim(rCH)[2], nind = dim(rCH)[1], z = known.state.ms(rCH, 3))
 
 # Initial values
 inits <- function(){list(mean.phij = runif(1, 0, 1), mean.phiad = runif(1, 0, 1), 
-                         mean.pNO = runif(1, 0, 1), mean.pO = runif(1, 0, 1), 
-                         z = z)}  
+                         mean.pnonobs = runif(1, 0, 1), mean.pobs = runif(1, 0, 1), 
+                         z = inits.z(rCH, f))}  
 
 # Parameters monitored
-parameters <- c("mean.phij", "mean.phiad",  "mean.pNO", "mean.pO")
+parameters <- c("mean.phij", "mean.phiad",  "mean.pnonobs", "mean.pobs")
 
 # MCMC settings
 ni <- 2000
@@ -261,29 +242,31 @@ nt <- 3
 nb <- 1000
 nc <- 3
 
-# Call JAGS from R (BRT 2 min)
-transtrap  <- jags(jags.data, inits, parameters, "trans_trap.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = T)
+# Call JAGS from R
+transtrap.cc  <- jags(jags.data, inits, parameters, "trans_trap_c-c.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = T)
+#Error in checkForRemoteErrors(val) : 
+#3 nodes produced errors; first error: Error in node z[494,6]
+#Cannot normalize density
 
-#Change code below to match model name and JAGS
+#Something wrong with initial values???
+
+#Plots
 par(mfrow = c(3, 3), las = 1)
-hist(agefirst$BUGSoutput$sims.list$mean.phi1, col = "gray", main = "",  xlab = expression(phi[1]))
-abline(v = phi.1, col = "red", lwd = 2)
-hist(agefirst$BUGSoutput$sims.list$mean.phi2, col = "gray", main = "",  xlab = expression(phi[2]), ylab = "")
-abline(v = phi.2, col = "red", lwd = 2)
-hist(agefirst$BUGSoutput$sims.list$mean.phiad, col = "gray", main = "",  xlab = expression(phi[ad]) , ylab = "")
+hist(transtrap.cc$sims.list$mean.phij, col = "gray", main = "",  xlab = expression(phi[juv]))
+abline(v = phi.j, col = "red", lwd = 2)
+hist(transtrap.cc$sims.list$mean.phiad, col = "gray", main = "",  xlab = expression(phi[ad]) , ylab = "")
 abline(v = phi.ad, col = "red", lwd = 2)
-hist(agefirst$BUGSoutput$sims.list$mean.alpha1, col = "gray", main = "",  xlab = expression(alpha[1]))
-abline(v = alpha.1, col = "red", lwd = 2)
-hist(agefirst$BUGSoutput$sims.list$mean.alpha2, col = "gray", main = "",  xlab = expression(alpha[2]) , ylab = "")
-abline(v = alpha.2, col = "red", lwd = 2)
 plot(0, type = "n", axes = F, ylab = "", xlab = "")
-hist(agefirst$BUGSoutput$sims.list$mean.pNB, col = "gray", main = "",  xlab = expression(p[NB]))
-abline(v = p.NB, col = "red", lwd = 2)
-hist(agefirst$BUGSoutput$sims.list$mean.pB, col = "gray", main = "",  xlab = expression(p[B]) , ylab = "")
-abline(v = p.B, col = "red", lwd = 2)
+hist(transtrap.cc$sims.list$mean.pnonobs, col = "gray", main = "",  xlab = expression(p["Not observed year before"]))
+abline(v = p.nseenbef, col = "red", lwd = 2)
+hist(transtrap.cc$sims.list$mean.pobs, col = "gray", main = "",  xlab = expression(p["Observed year before"]) , ylab = "")
+abline(v = p.seenbef, col = "red", lwd = 2)
+####################
 
 
 
 
 
 ####################
+
+
