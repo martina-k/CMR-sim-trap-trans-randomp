@@ -202,7 +202,7 @@ cat("
 sink()
 
 
-# Function to create known latent states z
+# Function from BPA book for creating known latent states z
 known.state.ms <- function(ms, notseen){
   # notseen: label for not seen
   state <- ms
@@ -214,19 +214,48 @@ known.state.ms <- function(ms, notseen){
   return(state)
 }
 
+known.state.cjs <- function(ch){ state <- ch
+for (i in 1:dim(ch)[1]){
+  n1 <- min(which(ch[i,]==1)) 
+  n2 <- max(which(ch[i,]==1)) 
+  state[i,n1:n2] <- 1 
+  state[i,n1] <- NA
+}
+state[state==0] <- NA 
+return(state)
+}
+
+#Trying to create function for known latent states
+known.state.trap <- function(ch, notseen){
+  state <- ch
+  state[state==notseen] <- NA
+  for (i in 1:dim(ch)[1]){
+    m1 <- min(which(!is.na(state[i,])))
+    m2 <- max(which(!is.na(state[i,])))
+    if(m1<m2){
+    for (j in (m1+1):m2){
+      if(is.na(j)==T){
+      if((j-1)<notseen){state[i,j] <- 2} #If event = 2 (thus, seen), latent state is 2 (seen on previous occasion)
+      if((j-1)==notseen){state[i,j] <- 3} #If not seen on previous occ, latent state is 3 (not seen on previous occasion)
+    }}}
+    state[i,m1] <- NA #Because we condition on first capture?
+  }
+  return(state)
+}
+
 # Function to create initial values for unknown z
 inits.z <- function(ch, f){
   for (i in 1:dim(ch)[1]){ch[i,1:f[i]] <- NA}
   notseen <- max(ch, na.rm = TRUE)
   v <- which(ch==notseen)
   ch[-v] <- NA
-  ch[v] <- 2 #Since state 2 and 3 are possible on recap occasions but only 2 is observed
+  ch[v] <- 2 #Since state 2 and 3 are possible on recap occasions but only 2 is observed?
   return(ch)
 }
 
 
 # Bundle data
-jags.data <- list(y = rCH, f = f, n.occasions = dim(rCH)[2], nind = dim(rCH)[1], z = known.state.ms(rCH, 3))
+jags.data <- list(y = rCH, f = f, n.occasions = dim(rCH)[2], nind = dim(rCH)[1], z = known.state.trap(rCH, 3))
 
 # Initial values
 inits <- function(){list(mean.phij = runif(1, 0, 1), mean.phiad = runif(1, 0, 1), 
@@ -245,10 +274,11 @@ nc <- 3
 # Call JAGS from R
 transtrap.cc  <- jags(jags.data, inits, parameters, "trans_trap_c-c.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = T)
 #Error in checkForRemoteErrors(val) : 
-#3 nodes produced errors; first error: Error in node z[494,6]
+#3 nodes produced errors; first error: Error in node z[495,6]
 #Cannot normalize density
 
-#Something wrong with initial values???
+#Something wrong with initial values??? Or known latent states?
+#Nodes producing the first errors are those with 1 3 3 as last three events (only seen on marking occasion)
 
 #Plots
 par(mfrow = c(3, 3), las = 1)
@@ -262,7 +292,6 @@ abline(v = p.nseenbef, col = "red", lwd = 2)
 hist(transtrap.cc$sims.list$mean.pobs, col = "gray", main = "",  xlab = expression(p["Observed year before"]) , ylab = "")
 abline(v = p.seenbef, col = "red", lwd = 2)
 ####################
-
 
 
 
