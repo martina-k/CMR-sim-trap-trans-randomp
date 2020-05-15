@@ -67,7 +67,7 @@ n.occasions <- 7
 n.states <- 4 #(Juvenile, Adult-observable, Adult-hiding (unobservable), Dead)
 n.obs <- 3 #(Seen as juv, Seen as ad (Not hiding), Not seen)
 marked <- matrix(0, ncol = n.states, nrow = n.occasions)
-marked[,1] <- rep(100, n.occasions)	# Releases only as juveniles
+marked[,1] <- rep(300, n.occasions)	# Releases only as juveniles
 
 # Define matrices with survival, transition and recapture probabilities
 # These are 4-dimensional matrices, with 
@@ -81,7 +81,7 @@ PSI.STATE <- array(NA, dim=c(n.states, n.states, totrel, n.occasions-1))
 for (i in 1:totrel){
   for (t in 1:(n.occasions-1)){
     PSI.STATE[,,i,t] <- matrix(c(
-      0, phi.j,                 0,                  1-phi.j,
+      0, phi.j*(1-hide),        phi.j*hide,         1-phi.j,
       0, phi.ad*(1-hide),       phi.ad*hide,        1-phi.ad,
       0, phi.ad*(1-hideagain),  phi.ad*hideagain,   1-phi.ad,
       0, 0,                     0,                  1), nrow = n.states, byrow  = TRUE)
@@ -154,8 +154,8 @@ cat("
     # Define probabilities of state S(t+1) given S(t)
     for (t in f[i]:(n.occasions-1)){
     ps[1,i,t,1] <- 0
-    ps[1,i,t,2] <- phi.juv[t]
-    ps[1,i,t,3] <- 0
+    ps[1,i,t,2] <- phi.juv[t] * p.O[t]
+    ps[1,i,t,3] <- phi.juv[t] * (1-p.O[t])
     ps[1,i,t,4] <- 1-phi.juv[t]
     ps[2,i,t,1] <- 0
     ps[2,i,t,2] <- phi.ad[t] * p.O[t]
@@ -234,11 +234,9 @@ known.state.trap <- function(ch, notseen){
     m2 <- max(which(!is.na(state[i,])))
     if(m1<m2){
     for (j in (m1+1):m2){
-      if(is.na(j)==T){
-      if((j-1)<notseen){state[i,j] <- 2} #If event = 2 (thus, seen), latent state is 2 (seen on previous occasion)
-      if((j-1)==notseen){state[i,j] <- 3} #If not seen on previous occ, latent state is 3 (not seen on previous occasion)
-    }}}
-    state[i,m1] <- NA #Because we condition on first capture?
+      if(is.na(j)==T){state[i,j] <- 3} #If not seen but seen later on, latent state is 3 (alive, not seen)
+    }}
+    state[i,m1] <- NA #Because we condition on first capture
   }
   return(state)
 }
@@ -266,19 +264,14 @@ inits <- function(){list(mean.phij = runif(1, 0, 1), mean.phiad = runif(1, 0, 1)
 parameters <- c("mean.phij", "mean.phiad",  "mean.pnonobs", "mean.pobs")
 
 # MCMC settings
-ni <- 2000
+ni <- 20000
 nt <- 3
-nb <- 1000
+nb <- 5000
 nc <- 3
 
 # Call JAGS from R
 transtrap.cc  <- jags(jags.data, inits, parameters, "trans_trap_c-c.jags", n.chains = nc, n.thin = nt, n.iter = ni, n.burnin = nb, parallel = T)
-#Error in checkForRemoteErrors(val) : 
-#3 nodes produced errors; first error: Error in node z[495,6]
-#Cannot normalize density
-
-#Something wrong with initial values??? Or known latent states?
-#Nodes producing the first errors are those with 1 3 3 as last three events (only seen on marking occasion)
+print(transtrap.cc, digits=3)
 
 #Plots
 par(mfrow = c(3, 3), las = 1)
