@@ -6,6 +6,7 @@
 #############################################################################
 
 #############################################################################
+setwd("C:\\Users\\Sarah J. Converse\\Documents\\Work")
 
 #Simulate CJS data 
 n.occ <- 15 #number of occasions
@@ -21,7 +22,7 @@ sigma.all <- 0.3
 sims <- 50 
 results <- matrix(NA,nrow=sims,ncol=7)
 colnames(results) <- c("b0","mean.p","sigma[1]","sigma[2]","sigma[3]","sigma.nrw","sigma.all")
-for(i in 1:sims){
+for(s in 1:sims){
 
 delta.all <- rnorm((n.occ-1),0,sigma.all) 
 delta.nrw <- rnorm((n.occ-1),0,sigma.nrw)
@@ -161,4 +162,5 @@ results[s,7] <- mean(out.jags$sims.list$sigma.all)
 print(s)
 
 }
+save.image("~/Work/results_cjs.sim.RData")
 
